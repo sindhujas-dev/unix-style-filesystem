@@ -391,7 +391,7 @@ fs_retcode_t inode_modify_data(filesystem_t *fs, inode_t *inode, size_t offset, 
         return INVALID_INPUT;
     }
 
-    //calculate the final filesize and verify there are enough blocks to support it
+    //calculate the final filesize and check to make sure there are enough blocks
     size_t final_file_size;
     if(offset + n > current_file_size){
         final_file_size = offset + n;
@@ -472,6 +472,8 @@ fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size
     
     return SUCCESS;
 }
+
+
 
 // make new_size to 0
 fs_retcode_t inode_release_data(filesystem_t *fs, inode_t *inode)
