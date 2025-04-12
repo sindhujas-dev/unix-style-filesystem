@@ -17,218 +17,6 @@
 
 // ----------------------- UTILITY FUNCTION ----------------------- //
 
-size_t write_data_in_direct_dblock(filesystem_t *fs, inode_t *inode, void *data, size_t n){
-    // get the current file size
-    size_t current_file_size = inode->internal.file_size;
-
-    // find the last claimed dblock
-    size_t dblock_index = current_file_size / DATA_BLOCK_SIZE;
-
-    // find the offset in the dblock to write to
-    size_t offset_in_dblock = current_file_size % DATA_BLOCK_SIZE;
-    size_t bytes_of_data_remaining = n;
-    size_t total_bytes_written = 0;
-    int blocks_allocated_count = 0;
-
-    // change data to a byte pointer so we can access it as a sequence of bytes
-    byte *data_ptr_inBytes = (byte *)data;
-
-    //if there is space to write in the 4 dblocks of the inode
-    while(dblock_index < INODE_DIRECT_BLOCK_COUNT && bytes_of_data_remaining > 0){
-        // if we need to allocate a new dblock to write data
-        if(inode->internal.direct_data[dblock_index] == 0){ //this checks if the dblock at the index is not allocated (value is 0)
-            dblock_index_t new_dblock_index;
-            fs_retcode_t new_dblock_return = claim_available_dblock(fs, &new_dblock_index);
-            if(new_dblock_return  != SUCCESS){
-                return -1;
-            }
-            blocks_allocated_count++;
-            inode->internal.direct_data[dblock_index] = new_dblock_index;
-        }
-
-        // write into the current dblock 
-        
-        // get pointer to the current dblock
-        byte *current_dblock = fs->dblocks + (inode->internal.direct_data[dblock_index] * DATA_BLOCK_SIZE);
-
-        // calculate number of bytes to write until dblock is full
-        size_t remaining_space_in_dblock = DATA_BLOCK_SIZE - offset_in_dblock;
-
-        // if there is more space left in dblock then there are bytes we need to write
-        if(remaining_space_in_dblock > bytes_of_data_remaining){
-            remaining_space_in_dblock = bytes_of_data_remaining;
-        }
-
-        // copy the data into the dblock
-        memcpy(current_dblock + offset_in_dblock, data_ptr_inBytes, remaining_space_in_dblock);
-
-        bytes_of_data_remaining -= remaining_space_in_dblock;
-        data_ptr_inBytes += remaining_space_in_dblock;
-        total_bytes_written += remaining_space_in_dblock;
-
-        dblock_index++;
-        offset_in_dblock = 0;
-    }
-
-    inode->internal.file_size += total_bytes_written;
-    return total_bytes_written;
-}
-
-fs_retcode_t write_data_in_indirect_dblock(filesystem_t *fs, inode_t *inode, void *data, size_t n, size_t r){
-    // get the current file size
-    size_t current_file_size = inode->internal.file_size;
-
-    // get file size after putting all bytes in direct dblocks (bytes already in indirect blocks)
-    size_t file_size_after_direct_dblocks = 0;
-    if (current_file_size > 256) {
-        file_size_after_direct_dblocks = current_file_size - 256;
-    }
-
-    // Calculate position within indirect blocks
-    size_t current_index_block_number = file_size_after_direct_dblocks / 960;
-    size_t dblock_in_current_index = (file_size_after_direct_dblocks / DATA_BLOCK_SIZE) % 15;
-    size_t dblock_partial_bytes_count = file_size_after_direct_dblocks % DATA_BLOCK_SIZE;
-    
-    // get the starting position of data that we should write 
-    byte *data_ptr = (byte *)data + 256;
-
-    //get remaining bytes to write
-    size_t remaining_bytes_to_write = r;
-
-    //bytes to write for a specific dblock
-    size_t bytes_to_write_individual_dblock;
-
-    if(remaining_bytes_to_write == 0){
-        return SUCCESS;
-    }
-
-    //total bytes written variable
-    size_t total_bytes_written = 0;
-
-    //get the first indirect (index) dblock index
-    dblock_index_t indirect_dblock_index = inode->internal.indirect_dblock;
-
-    //check if the first indirect (index) dblock index == 0 - meaning its not allocated
-    if(indirect_dblock_index == 0){
-        dblock_index_t new_indirect_dblock_index;
-        fs_retcode_t new_dblock_return = claim_available_dblock(fs, &new_indirect_dblock_index);
-        if(new_dblock_return  != SUCCESS){
-            return INSUFFICIENT_DBLOCKS;
-        }
-        inode->internal.indirect_dblock = new_indirect_dblock_index;
-        memset(fs->dblocks + (new_indirect_dblock_index * DATA_BLOCK_SIZE), 0, DATA_BLOCK_SIZE);
-        indirect_dblock_index = new_indirect_dblock_index;
-    }
-
-    //find the index dblock that we should work with
-    dblock_index_t curr_indirect_dblock_index = indirect_dblock_index;
-    for(size_t i = 0; i < current_index_block_number; i++){
-        // get a pointer to the current indirect dblock index
-        dblock_index_t *curr_indirect_dblock_index_ptr = cast_dblock_ptr(fs->dblocks + (curr_indirect_dblock_index * DATA_BLOCK_SIZE));
-        
-        // get a pointer to the next indirect index dblock index 
-        dblock_index_t next_index_dblock = curr_indirect_dblock_index_ptr[15];
-        
-        //if the next index dblock is not allocated
-        if(next_index_dblock == 0){
-            dblock_index_t new_indirect_dblock_index;
-            fs_retcode_t new_dblock_return = claim_available_dblock(fs, &new_indirect_dblock_index);
-            if(new_dblock_return != SUCCESS){
-                return INSUFFICIENT_DBLOCKS;
-            }
-            curr_indirect_dblock_index_ptr[15] = new_indirect_dblock_index;
-            memset(fs->dblocks + (new_indirect_dblock_index * DATA_BLOCK_SIZE), 0, DATA_BLOCK_SIZE);
-            curr_indirect_dblock_index = new_indirect_dblock_index;
-        }else{
-            curr_indirect_dblock_index = next_index_dblock;
-        }
-    }
-
-    while(remaining_bytes_to_write > 0){
-        //get the pointer of the current index dblock
-        dblock_index_t *curr_indirect_dblock_index_ptr = cast_dblock_ptr(fs->dblocks + (curr_indirect_dblock_index * DATA_BLOCK_SIZE));
-
-        // go through all the dblocks and start writing to available dblocks
-        for(size_t i = dblock_in_current_index; i < 15; i++){
-            //get the index value at the certain dblock element
-            dblock_index_t data_dblock_index = curr_indirect_dblock_index_ptr[i];
-
-            if(data_dblock_index == 0){
-                fs_retcode_t new_dblock_return = claim_available_dblock(fs, &data_dblock_index);
-                if(new_dblock_return  != SUCCESS){
-                    return INSUFFICIENT_DBLOCKS;
-                }
-                curr_indirect_dblock_index_ptr[i] = data_dblock_index;
-            }
-
-            // get pointer to the data dblock we just allocated
-            byte *data_dblock_ptr = fs->dblocks + (data_dblock_index * DATA_BLOCK_SIZE);
-
-            // calculate the number of bytes we need to write within this dblock
-            if(i == dblock_in_current_index && dblock_partial_bytes_count > 0){
-                // first block with partial content
-                if(remaining_bytes_to_write > (DATA_BLOCK_SIZE - dblock_partial_bytes_count)){
-                    bytes_to_write_individual_dblock = DATA_BLOCK_SIZE - dblock_partial_bytes_count;
-                }else{
-                    bytes_to_write_individual_dblock = remaining_bytes_to_write;
-                }
-
-                // get the address at which we should start writing in the data within the dblock
-                byte *destination = data_dblock_ptr + dblock_partial_bytes_count;
-                
-                // copy the data from the data pointer to the destination
-                memcpy(destination, data_ptr, bytes_to_write_individual_dblock);
-            }else{
-                // filling up bytes that are either full or a fully new block
-                if(remaining_bytes_to_write > DATA_BLOCK_SIZE){
-                    bytes_to_write_individual_dblock = DATA_BLOCK_SIZE;
-                }else{
-                    bytes_to_write_individual_dblock = remaining_bytes_to_write;
-                }
-                
-                // copy the data from the data pointer to the destination
-                memcpy(data_dblock_ptr, data_ptr, bytes_to_write_individual_dblock);
-            }
-           
-            // update the data pointer so it points to the next byte of data
-            data_ptr += bytes_to_write_individual_dblock;
-
-            // update the remaining number of bytes to write
-            remaining_bytes_to_write -= bytes_to_write_individual_dblock;
-
-            // update the bytes written 
-            total_bytes_written += bytes_to_write_individual_dblock;
-            
-            if(remaining_bytes_to_write == 0){
-                break;
-            }
-        }
-
-        // reset the dblock for the next index dblock
-        dblock_in_current_index = 0;
-        dblock_partial_bytes_count = 0;
-
-        //reset the next index dblock
-        if(remaining_bytes_to_write > 0){
-            dblock_index_t next_index_dblock = curr_indirect_dblock_index_ptr[15];
-            if(next_index_dblock == 0){
-                dblock_index_t new_indirect_dblock_index;
-                fs_retcode_t new_dblock_return = claim_available_dblock(fs, &new_indirect_dblock_index);
-                if(new_dblock_return  != SUCCESS){
-                    return INSUFFICIENT_DBLOCKS;
-                }
-                curr_indirect_dblock_index_ptr[15] = new_indirect_dblock_index;
-                curr_indirect_dblock_index = new_indirect_dblock_index;
-                memset(fs->dblocks + (new_indirect_dblock_index * DATA_BLOCK_SIZE), 0, DATA_BLOCK_SIZE);
-            }else{
-                curr_indirect_dblock_index = next_index_dblock;
-            }
-        }
-    }
-    inode->internal.file_size = current_file_size + total_bytes_written;
-    return SUCCESS;
-}
-
 //helper function made to reach the certain dblock we should work with, given an offset in bytes
 fs_retcode_t find_dblock_with_bytes(filesystem_t *fs, inode_t *inode, size_t offset, byte **dblock_ptr, size_t *offset_within_dblock_ptr, bool need_to_write){
     if(fs == NULL || inode == NULL || dblock_ptr == NULL || offset_within_dblock_ptr == NULL){
@@ -366,6 +154,117 @@ fs_retcode_t find_dblock_with_bytes(filesystem_t *fs, inode_t *inode, size_t off
     return SUCCESS;
 }
 
+size_t write_data_in_direct_dblock(filesystem_t *fs, inode_t *inode, void *data, size_t n){
+    // get the current file size
+    size_t original_file_size = inode->internal.file_size;
+
+    //variable for total bytes written
+    size_t bytes_to_write = n;
+    size_t total_bytes_written = 0;
+
+    // change data to a byte pointer so we can access it as a sequence of bytes
+    byte *data_ptr_inBytes = (byte *)data;
+
+    //check if writing bytes to original file size will exceet direct data blocks
+    size_t max_direct_dblock_bytes = INODE_DIRECT_BLOCK_COUNT * DATA_BLOCK_SIZE;
+    size_t available_direct_dblock_space = 0;
+
+    //if there is still space to write in the data dblock
+    if(original_file_size < max_direct_dblock_bytes){
+        available_direct_dblock_space = max_direct_dblock_bytes - original_file_size;
+        if(bytes_to_write > available_direct_dblock_space){
+            bytes_to_write = available_direct_dblock_space;
+        }
+    }else{
+        return 0;
+    }
+
+    //if there are no bytes to write to direct dblocks
+    if(bytes_to_write == 0){
+        return 0;
+    }
+
+    size_t current_offset = original_file_size;
+
+    //while the numbero f bytes we wrote is less then bytes we have to write
+    while(total_bytes_written < bytes_to_write){
+        byte *dblock_ptr;
+        size_t offset_within_dblock;
+
+        //find the dblock that we should start writing to
+        fs_retcode_t result = find_dblock_with_bytes(fs, inode, current_offset, &dblock_ptr, &offset_within_dblock, true);
+        if(result != SUCCESS){
+            //reset file size
+            inode->internal.file_size = original_file_size;
+            return -1;
+        }
+
+        //find how many bytes to write in this specific file (if remaining bytes to write is less than remaining size in dblock)
+        size_t write_dblock_bytes = DATA_BLOCK_SIZE - offset_within_dblock;
+        if(write_dblock_bytes > (bytes_to_write - total_bytes_written)){
+            write_dblock_bytes = bytes_to_write - total_bytes_written;
+        }  
+
+        //copy data from buffer to dblock at current dblock + offset position
+        memcpy(dblock_ptr + offset_within_dblock, data_ptr_inBytes, write_dblock_bytes);
+
+        //move data pointer forward by number of bytes written
+        data_ptr_inBytes += write_dblock_bytes;
+
+        current_offset += write_dblock_bytes;
+        total_bytes_written += write_dblock_bytes;
+        
+        inode->internal.file_size = current_offset;
+    }
+    return total_bytes_written;
+}
+
+fs_retcode_t write_data_in_indirect_dblock(filesystem_t *fs, inode_t *inode, void *data, size_t n, size_t r){
+    //if remaining bytes to fill equals 0
+    if(r == 0){
+        return SUCCESS;
+    }
+
+    // get the current file size
+    size_t current_file_size = inode->internal.file_size;
+    size_t bytes_to_write = r;
+    size_t total_bytes_written = 0;
+
+    //find the offset to start from in the data
+    byte *data_ptr_inBytes = (byte *)data + (n-r);
+    size_t current_offset = current_file_size;
+
+    //while there are still bytes to write
+    while(total_bytes_written < bytes_to_write){
+        //get the current dblock pointer within index dblock, and offset within that dblock
+        byte *dblock_ptr;
+        size_t offset_within_dblock;
+
+        //call helper function
+        fs_retcode_t result = find_dblock_with_bytes(fs, inode, current_offset, &dblock_ptr, &offset_within_dblock, true);
+        if(result != SUCCESS){
+            return result;
+        }
+
+        //find how many bytes to write in this specific block (if remaining bytes to write is less than remaining size in dblock)
+        size_t write_dblock_bytes = DATA_BLOCK_SIZE - offset_within_dblock;
+        if(write_dblock_bytes > (bytes_to_write - total_bytes_written)){
+            write_dblock_bytes = bytes_to_write - total_bytes_written;
+        }  
+ 
+        //copy data from buffer to dblock at current dblock + offset position
+        memcpy(dblock_ptr + offset_within_dblock, data_ptr_inBytes, write_dblock_bytes);
+ 
+        //move data pointer forward by number of bytes written
+        data_ptr_inBytes += write_dblock_bytes;
+ 
+        current_offset += write_dblock_bytes;
+        total_bytes_written += write_dblock_bytes;
+         
+        inode->internal.file_size = current_offset;
+    }
+    return SUCCESS;
+}
 
 // ----------------------- CORE FUNCTION ----------------------- //
 
@@ -389,16 +288,31 @@ fs_retcode_t inode_write_data(filesystem_t *fs, inode_t *inode, void *data, size
         return INSUFFICIENT_DBLOCKS;
     }
 
+    size_t original_file_size = inode->internal.file_size;
+
     // fill the direct nodes if necessary (helper function) 
     int bytes_written = write_data_in_direct_dblock(fs, inode, data, n);
     if(bytes_written < 0){
+        inode->internal.file_size = original_file_size;
         return INSUFFICIENT_DBLOCKS;
     }
 
     // fill in indirect nodes if necessary (helper function)
     int remaining_bytes_to_write = n - bytes_written;
-    write_data_in_indirect_dblock(fs, inode, data, n, remaining_bytes_to_write);
 
+    //if there are more bytes to write
+    if(remaining_bytes_to_write > 0){
+        fs_retcode_t result = write_data_in_indirect_dblock(fs, inode, data, n, remaining_bytes_to_write);
+        if(result != SUCCESS){
+            //reset file size and return error
+            inode->internal.file_size = original_file_size;
+            return result;
+        }
+    }
+
+    if(inode->internal.file_size != original_file_size + n){
+        inode->internal.file_size = original_file_size + n;
+    }
     // we can store 64 bytes in the dblock?
 
     return SUCCESS;
@@ -463,9 +377,7 @@ fs_retcode_t inode_read_data(filesystem_t *fs, inode_t *inode, size_t offset, vo
     //for 0 to n, use the helper function to read and copy 1 byte at a time
 }
 
-fs_retcode_t inode_modify_data(filesystem_t *fs, inode_t *inode, size_t offset, void *buffer, size_t n)
-{
-
+fs_retcode_t inode_modify_data(filesystem_t *fs, inode_t *inode, size_t offset, void *buffer, size_t n){
     //check to see if the input is valid
     if (fs == NULL || inode == NULL) {
         return INVALID_INPUT;
