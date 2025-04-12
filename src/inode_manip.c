@@ -441,10 +441,8 @@ fs_retcode_t inode_read_data(filesystem_t *fs, inode_t *inode, size_t offset, vo
     while(remaining_bytes_to_read > 0){
         byte *dblock_ptr;
         size_t offset_within_dblock;
-        fs_retcode_t result = find_dblock_with_bytes(fs, inode, current_offset, &dblock_ptr, &offset_within_dblock, false);
-        if(result != SUCCESS){ //if some error occurs just return success
-            return SUCCESS;
-        }
+        find_dblock_with_bytes(fs, inode, current_offset, &dblock_ptr, &offset_within_dblock, false);
+
         //calculate how many bytes we can read from this dblock
         size_t curr_bytes_in_dblock = DATA_BLOCK_SIZE - offset_within_dblock;
         if(curr_bytes_in_dblock > remaining_bytes_to_read){
@@ -467,22 +465,80 @@ fs_retcode_t inode_read_data(filesystem_t *fs, inode_t *inode, size_t offset, vo
 
 fs_retcode_t inode_modify_data(filesystem_t *fs, inode_t *inode, size_t offset, void *buffer, size_t n)
 {
-    (void)fs;
-    (void)inode;
-    (void)offset;
-    (void)buffer;
-    (void)n;
-    return NOT_IMPLEMENTED;
 
     //check to see if the input is valid
+    if (fs == NULL || inode == NULL) {
+        return INVALID_INPUT;
+    }
+
+    //get current file size
+    size_t current_file_size = inode->internal.file_size;
+
+    //if the offset is larger than the current file size, cannot fill
+    if (offset > current_file_size) {
+        return INVALID_INPUT;
+    }
 
     //calculate the final filesize and verify there are enough blocks to support it
+    size_t final_file_size;
+    if(offset + n > current_file_size){
+        final_file_size = offset + n;
+    }else{
+        final_file_size = current_file_size;
+    }
+
     //use calculate_necessary_dblock_amount and available_dblocks
+    size_t total_dblocks_needed = calculate_necessary_dblock_amount(final_file_size);
+    size_t current_dblocks_used = calculate_necessary_dblock_amount(current_file_size);
+    size_t new_dblocks_needed = total_dblocks_needed - current_dblocks_used;
 
+    //get available remaining dblocks in fs
+    size_t remaining_fs_dblocks = available_dblocks(fs);
 
-    //Write to existing data in your inode
+    if(new_dblocks_needed > remaining_fs_dblocks){
+        return INSUFFICIENT_DBLOCKS;
+    }
 
-    //For the new data, call "inode_write_data" and return
+    byte *buffer_destination = (byte *)buffer;
+    size_t current_offset = offset;
+    size_t remaining_bytes_to_modify = n;
+
+    //while there are still remaining bytes to write
+    while(remaining_bytes_to_modify > 0){
+        byte *curr_dblock_ptr; //stores the pointer to the dblock we write from
+        size_t offset_within_dblock; //stores the position within that dblock
+
+        //find the dblock we should start modifying from
+        fs_retcode_t result = find_dblock_with_bytes(fs, inode, current_offset, &curr_dblock_ptr, &offset_within_dblock, true);
+
+        //if there was an error, return error
+        if(result != SUCCESS){
+            inode->internal.file_size = current_file_size;
+            return result;
+        }
+
+        //calcualte how many bytes we write in this current dblock
+        size_t bytes_to_write = DATA_BLOCK_SIZE - offset_within_dblock;
+        if(bytes_to_write > remaining_bytes_to_modify){
+            bytes_to_write = remaining_bytes_to_modify;
+        }
+
+        //copy data from buffer to dblock at current dblock + offset position
+        memcpy(curr_dblock_ptr + offset_within_dblock, buffer_destination, bytes_to_write);
+
+        //move buffer pointer forward by number of bytes written
+        buffer_destination += bytes_to_write;
+
+        current_offset += bytes_to_write;
+        remaining_bytes_to_modify -= bytes_to_write;
+        
+        //if we are adding on to the original file size, update file size
+        if(current_offset > inode->internal.file_size){
+            inode->internal.file_size = current_offset;
+        }
+
+    }
+    return SUCCESS;
 }
 
 fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size)
