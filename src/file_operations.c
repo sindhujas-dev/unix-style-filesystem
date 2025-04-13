@@ -173,10 +173,48 @@ size_t fs_write(fs_file_t file, void *buffer, size_t n)
 
 int fs_seek(fs_file_t file, seek_mode_t seek_mode, int offset)
 {
-    (void)file;
-    (void)seek_mode;
-    (void)offset;
+    if(file == NULL){
+        return -1;
+    }
 
-    return -2;
+    if((seek_mode != FS_SEEK_END) && (seek_mode != FS_SEEK_CURRENT) && (seek_mode != FS_SEEK_START)){
+        return -1;
+    }
+
+    //to store updated offset
+    int updated_offset;
+
+    inode_t *inode_ptr = file->inode;
+    size_t curr_offset = file->offset;
+    size_t current_file_size = inode_ptr->internal.file_size;
+
+    //if seekmode is fs_seek_start
+    if(seek_mode == FS_SEEK_START){
+        updated_offset = offset;
+    }
+
+    // if seekmode is fs_seek_current
+    if(seek_mode == FS_SEEK_CURRENT){
+        updated_offset = curr_offset + offset;
+    }
+
+    // if seekmode is fs_seek_end
+    if(seek_mode == FS_SEEK_END){
+        updated_offset = offset + current_file_size;
+    }
+
+    //if final offset is less than 0
+    if(updated_offset < 0){
+        return -1;
+    }
+
+    //if final offset is greater than file size, set it to file size, successful
+    if((size_t)updated_offset > current_file_size){
+        updated_offset = current_file_size;
+    }
+
+    file->offset = (size_t)updated_offset;
+
+    return 0;
 }
 
