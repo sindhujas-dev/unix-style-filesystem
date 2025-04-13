@@ -144,7 +144,31 @@ size_t fs_write(fs_file_t file, void *buffer, size_t n)
         return 0;
     }
 
-    return -2;
+    //filesystem pointer
+    filesystem_t *file_ptr = file->fs;
+
+    //inode pointer
+    inode_t *inode_ptr = file->inode;
+
+    //get current file offset
+    size_t curr_offset = file->offset;
+
+    //number of bytes to write
+    size_t total_bytes_written = 0;
+
+   
+    fs_retcode_t result = inode_modify_data(file_ptr, inode_ptr, curr_offset, buffer, n);
+    if(result != SUCCESS){
+        return 0;
+    }
+
+    total_bytes_written = n;
+
+    curr_offset += total_bytes_written;
+    file->offset = curr_offset;
+    
+    return total_bytes_written;
+
 }
 
 int fs_seek(fs_file_t file, seek_mode_t seek_mode, int offset)
