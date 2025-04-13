@@ -3,50 +3,140 @@
 #include "utility.h"
 
 #include <string.h>
+#include <stdbool.h>
 
 #define DIRECTORY_ENTRY_SIZE (sizeof(inode_index_t) + MAX_FILE_NAME_LEN)
 #define DIRECTORY_ENTRIES_PER_DATABLOCK (DATA_BLOCK_SIZE / DIRECTORY_ENTRY_SIZE)
 
+//helper function to go through path to find file and 
+
+
 // ----------------------- CORE FUNCTION ----------------------- //
 int new_file(terminal_context_t *context, char *path, permission_t perms)
 {
+    if(path == NULL || context == NULL){
+        return 0;
+    }
+
+    if(path[0] == '\0'){
+        return -1;
+    }
+
+    /*
+
+    //parsing through the path to get to target directory
+
+    //access each dir through traversing hte path
+    char *copy_of_path = strdup(path);
+    if(copy_of_path == NULL){
+        return -1;
+    }
+
+    //get the dirname and the basename
+    char *dirname_ptr;
+    char *basename_ptr;
+    //pointer to the last slash in the path 
+    char *last_slash_ptr = strrchr(path, '/');
+    
+    //couldn't find slash, so file is in current directory
+    if(last_slash_ptr == NULL){
+        dirname_ptr = ".";
+        basename_ptr = copy_of_path;
+        
+    }else{
+
+    }
+
+
+
+
+
+
+    
+
+    char *dir = strtok(copy_of_path, "/");
+
+    //if the dir is empty initially
+
+    char *dirname;
+    char *basename;
+
+
+
+    while(dir != NULL){
+        
+        //info(1, "Token: %s\n", dir);
+        dir = strtok(NULL, "/");
+    }
+
+    free(copy_of_path);
+
+    */
     (void) context;
-    (void) path;
     (void) perms;
     return -2;
 }
 
 int new_directory(terminal_context_t *context, char *path)
 {
-    (void) context;
-    (void) path;
+    if(context == NULL || path == NULL){
+        return 0;
+    }
+
+//     char *copy_of_path = strdup(path);
+//     if(copy_of_path == NULL){
+//         return -1;
+//     }
+
+//     info(1, "path: %s\n", path);
+//     display_filesystem(context->fs, DISPLAY_FS_FORMAT);
+
+//     char *prev_dir = NULL;
+//     char *curr_dir = strtok(copy_of_path, "/");
+//     while(curr_dir != NULL){
+        
+//         info(1, "Token: %s\n", curr_dir);
+//         curr_dir = strtok(NULL, "/");
+//     }
+
+//     free(copy_of_path);
+
+
     return -2;
 }
 
 int remove_file(terminal_context_t *context, char *path)
 {
-    (void) context;
-    (void) path;
+    if(context == NULL || path == NULL){
+        return 0;
+    }
     return -2;
 }
 
 // we can only delete a directory if it is empty!!
 int remove_directory(terminal_context_t *context, char *path)
 {
-    (void) context;
-    (void) path;
+    if(context == NULL || path == NULL){
+        return 0;
+    }
     return -2;
 }
 
 int change_directory(terminal_context_t *context, char *path)
 {
-    (void) context;
-    (void) path;
+
+    if(context == NULL || path == NULL){
+        return 0;
+    }
+
     return -2;
 }
 
 int list(terminal_context_t *context, char *path)
 {
+    if(path == NULL || context == NULL){
+        return 0;
+    }
     (void) context;
     (void) path;
     return -2;
@@ -54,15 +144,20 @@ int list(terminal_context_t *context, char *path)
 
 char *get_path_string(terminal_context_t *context)
 {
-    (void) context;
-
-    return NULL;
+    
+    if(context == NULL){
+        char *result = strdup("");
+        return result;
+    }
+    char *path_root = strdup("/root");
+    return path_root;
 }
 
 int tree(terminal_context_t *context, char *path)
 {
-    (void) context;
-    (void) path;
+    if(context == NULL || path == NULL){
+        return 0;
+    }
     return -2;
 }
 
@@ -85,9 +180,45 @@ fs_file_t fs_open(terminal_context_t *context, char *path)
     (void) path;
 
     //confirm path exists, leads to a file
+
+    // inode_t *curr_working_dir = context->working_directory;
     
-    //allocate space for the file, assign its fs and inode. Set offset to 0.
-    //return file
+    // //split path
+    // char *copy_of_path = strdup(path);
+
+    // if(copy_of_path == NULL){
+    //     return (fs_file_t)0;
+    // }
+
+    // char *part;
+    // char *remaining_path = NULL;
+    // part = strtok_t(copy_of_path, "/", &remaining_path);
+
+    // char *prev_part = part;
+    // char *next_part = NULL;
+
+    // while(prev_part != NULL){
+    //     if(curr_working_dir->internal.file_type != DATA_FILE){
+    //         free(copy_of_path);
+    //         REPORT_RETCODE(DIR_NOT_FOUND);
+    //         return NULL;  
+    //     }
+    //     inode_t *next_working_dir;
+
+    //     if(next_working_dir == NULL)
+
+    //     while(curr_working_dir != NULL){
+    //         if(curr_working_dir->inode->internal.file_name == part){
+    //             curr_working_dir = 
+    //         }
+    //     }
+        
+    // }
+
+    // free(copy_of_path);
+    
+    // //allocate space for the file, assign its fs and inode. Set offset to 0.
+    // //return file
 
     return (fs_file_t)0;
 }
