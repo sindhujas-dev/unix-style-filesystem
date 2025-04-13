@@ -69,11 +69,14 @@ int tree(terminal_context_t *context, char *path)
 //Part 2
 void new_terminal(filesystem_t *fs, terminal_context_t *term)
 {
-    (void) fs;
-    (void) term;
     //check if inputs are valid
+    if(fs == NULL || term == NULL){
+        return;
+    }
 
     //assign file system and root inode.
+    term->fs = fs;
+    term->working_directory = &fs->inodes[0];
 }
 
 fs_file_t fs_open(terminal_context_t *context, char *path)
@@ -82,6 +85,7 @@ fs_file_t fs_open(terminal_context_t *context, char *path)
     (void) path;
 
     //confirm path exists, leads to a file
+    
     //allocate space for the file, assign its fs and inode. Set offset to 0.
     //return file
 
@@ -90,23 +94,55 @@ fs_file_t fs_open(terminal_context_t *context, char *path)
 
 void fs_close(fs_file_t file)
 {
-    (void)file;
+    if(file == NULL){
+        return;
+    }
+    free(file);
 }
 
 size_t fs_read(fs_file_t file, void *buffer, size_t n)
 {
-    (void)file;
-    (void)buffer;
-    (void)n;
+    //if file is invalid
+    if(file == NULL){
+        return 0;
+    }
 
-    return -2;
+    //filesystem pointer
+    filesystem_t *file_ptr = file->fs;
+
+    //inode pointer
+    inode_t *inode_ptr = file->inode;
+
+    //get current file offset
+    size_t curr_offset = file->offset;
+
+    //number of bytes to read
+    size_t bytes_to_read = n;
+
+    //current file size
+    size_t current_file_size = inode_ptr->internal.file_size;
+
+    if(curr_offset + n > current_file_size){
+        bytes_to_read = current_file_size - curr_offset;
+    }
+
+    size_t total_bytes_read = 0;
+    fs_retcode_t result = inode_read_data(file_ptr, inode_ptr, curr_offset, buffer, bytes_to_read, &total_bytes_read);
+    if(result != SUCCESS){
+        return 0;
+    }
+    curr_offset += total_bytes_read;
+    file->offset = curr_offset;
+    
+    return total_bytes_read;
 }
 
 size_t fs_write(fs_file_t file, void *buffer, size_t n)
 {
-    (void)file;
-    (void)buffer;
-    (void)n;
+    //if file is invalid
+    if(file == NULL){
+        return 0;
+    }
 
     return -2;
 }
