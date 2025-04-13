@@ -455,25 +455,192 @@ fs_retcode_t inode_modify_data(filesystem_t *fs, inode_t *inode, size_t offset, 
 
 fs_retcode_t inode_shrink_data(filesystem_t *fs, inode_t *inode, size_t new_size)
 {
-    //check to see if inputs are in valid range
+    // 1. check to see if inputs are in valid range
     if(fs == NULL || inode == NULL){
         return INVALID_INPUT;
     }
 
-    // check if the new size exceeds the inode size
-    if(new_size > inode->internal.file_size){
+    // store original file size
+    size_t original_file_size = inode->internal.file_size;
+
+    // 2. check if the new size is greater than original file size
+    if(new_size > original_file_size){
         return INVALID_INPUT;
     }
 
-    // check if the size equals the current size
-    if(new_size == inode->internal.file_size){
+    // 4. if the new size equals original file size, don't remove anything
+    if(new_size == original_file_size){
         return SUCCESS;
     }
+
+    // calculates how many data blocks are needed to store the file with new_size bytes
+    size_t necessary_total_dblocks_new = (new_size + DATA_BLOCK_SIZE - 1) / DATA_BLOCK_SIZE;
+    //size_t necessary_total_dblocks_new = calculate_necessary_dblock_amount(new_size);
+
+    // checking if we only have to deal with any direct data dblocks
+    size_t necessary_direct_dblocks;
+    if(new_size <= INODE_DIRECT_BLOCK_COUNT * DATA_BLOCK_SIZE){
+        necessary_direct_dblocks = necessary_total_dblocks_new;
+    }else{
+        necessary_direct_dblocks = INODE_DIRECT_BLOCK_COUNT;
+    }
+
+    // release direct data dblocks that aren't needed
+    for(size_t i = necessary_direct_dblocks; i < INODE_DIRECT_BLOCK_COUNT; i++){
+        // if the block is allocated, release
+        if(inode->internal.direct_data[i] != 0){
+            fs_retcode_t result = release_dblock(fs, fs->dblocks + (inode->internal.direct_data[i] * DATA_BLOCK_SIZE));
+            if (result != SUCCESS) {
+                return result;
+            }
+        }
+    }
+
+    // if the new size doesn't include any index dblocks, release all
+    if(new_size <= INODE_DIRECT_BLOCK_COUNT * DATA_BLOCK_SIZE) {
+        if(inode->internal.indirect_dblock != 0) {
+            //start with the first indirect dblock
+            dblock_index_t current_indirect_dblock_index = inode->internal.indirect_dblock;
+            
+            // loop until there are no blocks left
+            while(current_indirect_dblock_index != 0) {
+                //get pointer to current indirect index dblock
+                dblock_index_t *curr_indirect_dblock_index_ptr = cast_dblock_ptr(fs->dblocks + (current_indirect_dblock_index * DATA_BLOCK_SIZE));
+                
+                //if the next index dblock is not allocated
+                dblock_index_t next_index_dblock = curr_indirect_dblock_index_ptr[15];
+                
+                //release all direct dblocks within index
+                for (size_t i = 0; i < 15; i++) {
+                    if (curr_indirect_dblock_index_ptr[i] != 0) {
+                        fs_retcode_t result = release_dblock(fs, fs->dblocks + (curr_indirect_dblock_index_ptr[i] * DATA_BLOCK_SIZE));
+                        if (result != SUCCESS) {
+                            return result;
+                        }
+                    }
+                }
+                
+                //release the index dblock
+                fs_retcode_t result = release_dblock(fs, fs->dblocks + (current_indirect_dblock_index * DATA_BLOCK_SIZE));
+                if (result != SUCCESS) {
+                    return result;
+                }
+                
+                //make current index dblock to next index dblock
+                current_indirect_dblock_index = next_index_dblock;
+            }
+        }
+        inode->internal.file_size = new_size;
+        return SUCCESS;
+    }
+
+    // if the new size includes index dblocks, we release dblocks until we get the correct size
+    size_t necessary_indirect_dblocks_new = necessary_total_dblocks_new - INODE_DIRECT_BLOCK_COUNT;
+
+    // if we have to just shrink indirect dblocsk
+    // start with the first indiret dblock
+    dblock_index_t curr_indirect_dblock_index = inode->internal.indirect_dblock;
+    dblock_index_t prev_indirect_dblock_index = 0;
+    size_t dblocks_kept = 0;
     
+    //loop until there are no blocks left
+    while(curr_indirect_dblock_index != 0){
+        // get a pointer to the current indirect index dblock
+        dblock_index_t *curr_indirect_dblock_index_ptr = cast_dblock_ptr(fs->dblocks + (curr_indirect_dblock_index * DATA_BLOCK_SIZE));
+        
+        // get the index of the next index dblock
+        dblock_index_t next_indirect_dblock_index = curr_indirect_dblock_index_ptr[15];
+        
+        // if we've reached the number of dblocks we need to keep
+        if(dblocks_kept >= necessary_indirect_dblocks_new){
+            //release all direct dblocks within index
+            for(size_t i = 0; i < 15; i++){
+                if(curr_indirect_dblock_index_ptr[i] != 0){
+                    fs_retcode_t result = release_dblock(fs, fs->dblocks + (curr_indirect_dblock_index_ptr[i] * DATA_BLOCK_SIZE));
+                    if(result != SUCCESS){
+                        return result;
+                    }
+                }
+            }
+
+            //release the index dblock
+            fs_retcode_t result = release_dblock(fs, fs->dblocks + (curr_indirect_dblock_index * DATA_BLOCK_SIZE));
+            if (result != SUCCESS) {
+                return result;
+            }
+            
+            //update previous block's next pointer or the inode's indirect pointer
+            if(prev_indirect_dblock_index != 0){
+                dblock_index_t *prev_indirect_dblock_index_ptr = cast_dblock_ptr(fs->dblocks + (prev_indirect_dblock_index * DATA_BLOCK_SIZE));
+                prev_indirect_dblock_index_ptr[15] = next_indirect_dblock_index;
+            }else{
+                inode->internal.indirect_dblock = next_indirect_dblock_index;
+            }
+            
+            //make current index dblock to next index dblock
+            curr_indirect_dblock_index = next_indirect_dblock_index;
+        }
+        
+        // go through the data blocks within the index dblock
+        for(size_t i = 0; i < 15; i++){
+            //if the data block is allocated
+            if(curr_indirect_dblock_index_ptr[i] != 0){
+                //if we still need to keep data blocks
+                if(dblocks_kept < necessary_indirect_dblocks_new){
+                    dblocks_kept++;
+                }else{
+                    fs_retcode_t result = release_dblock(fs, fs->dblocks + (curr_indirect_dblock_index_ptr[i] * DATA_BLOCK_SIZE));
+                    if(result != SUCCESS){
+                        return result;
+                    }
+                }
+            }
+        }
+        
+        // check if the index dblock is empty (if we removed all data blocks)
+        if(dblocks_kept >= necessary_indirect_dblocks_new) {
+            bool index_dblock_empty = true;
+            for(size_t i = 0; i < 15; i++){
+                if(curr_indirect_dblock_index_ptr[i] != 0){
+                    index_dblock_empty = false;
+                    break;
+                }
+            }
+            
+            //if the index dblock is empty, we release index dblock
+            if(index_dblock_empty == true){
+                // get next index dblock
+                dblock_index_t next_index_dblock = curr_indirect_dblock_index_ptr[15];
+                
+                // release current dblock
+                fs_retcode_t result = release_dblock(fs, fs->dblocks + (curr_indirect_dblock_index * DATA_BLOCK_SIZE));
+                if(result != SUCCESS){
+                    return result;
+                }
+
+                //update previous block's next pointer or the inode's indirect pointer
+                if(prev_indirect_dblock_index != 0){
+                    dblock_index_t *prev_indirect_dblock_index_ptr = cast_dblock_ptr(fs->dblocks + (prev_indirect_dblock_index * DATA_BLOCK_SIZE));
+                    prev_indirect_dblock_index_ptr[15] = next_index_dblock;
+                }else{
+                    inode->internal.indirect_dblock = next_index_dblock;
+                }
+                curr_indirect_dblock_index = next_index_dblock;
+            //if the index dblock is not empty, dont release
+            }else{
+                prev_indirect_dblock_index = curr_indirect_dblock_index;
+                curr_indirect_dblock_index = next_indirect_dblock_index;
+            }
+        //if we still have to keep blocks, move to next index dblock 
+        }else{
+            prev_indirect_dblock_index = curr_indirect_dblock_index;
+            curr_indirect_dblock_index = next_indirect_dblock_index;
+        }
+    }
+
+    inode->internal.file_size = new_size;
     return SUCCESS;
 }
-
-
 
 // make new_size to 0
 fs_retcode_t inode_release_data(filesystem_t *fs, inode_t *inode)
@@ -481,5 +648,6 @@ fs_retcode_t inode_release_data(filesystem_t *fs, inode_t *inode)
     if(fs == NULL || inode == NULL){
         return INVALID_INPUT;
     }
+    inode_shrink_data(fs, inode, 0);
     return SUCCESS;
 }
