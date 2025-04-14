@@ -77,8 +77,7 @@ char *get_path_string(terminal_context_t *context)
         char *result = strdup("");
         return result;
     }
-    char *path_root = strdup("/root");
-    return path_root;
+    return NULL;
 
 
 }
